@@ -160,7 +160,53 @@ def decision(packet, inputs):
     }
 
 
-ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision)}
+def pick(packet, inputs):
+    """Most active market: biggest move times volume spike; NONE if nothing stands out."""
+    best, best_score = None, 0.0
+    for row in packet.get("watchlist", []):
+        score = abs(row["change_pct"]) * row["volume_ratio"]
+        if row["volume_ratio"] >= 1.2 and score > best_score:
+            best, best_score = row, score
+    if best is None:
+        return {"market": "NONE", "reason_to_research": "Ничего не выделяется.", "liquidity_status": "unknown",
+                "data_quality": "good", "sources": [packet.get("_label", "")], "confidence": 0}
+    return {
+        "market": best["symbol"],
+        "reason_to_research": f"Движение {best['change_pct']:+.1f}% при объёме {best['volume_ratio']:.1f}× к среднему.",
+        "liquidity_status": "high",
+        "data_quality": "good",
+        "sources": [packet.get("_label", "")],
+        "confidence": 60,
+    }
+
+
+def trade_decision(packet, inputs):
+    charts_out = inputs.get("charts", {})
+    entry = packet["price_history"][-1]["close"]
+    trend = charts_out.get("trend")
+    if trend not in ("up", "down"):
+        return {"decision": "WAIT", "stop_loss": 0, "take_profit": 0, "reasons": [f"Тренд: {trend}"],
+                "conflicting_signals": [], "missing_information": [], "invalidation_conditions": []}
+    lows = [b["low"] for b in packet["price_history"][-10:]]
+    highs = [b["high"] for b in packet["price_history"][-10:]]
+    if trend == "up":
+        stop = min(min(lows), entry * 0.99)
+        take = entry + 2 * (entry - stop)
+    else:
+        stop = max(max(highs), entry * 1.01)
+        take = entry - 2 * (stop - entry)
+    return {
+        "decision": "BUY" if trend == "up" else "SELL",
+        "stop_loss": round(stop, 6),
+        "take_profit": round(take, 6),
+        "reasons": [f"Тренд: {trend}", f"Риск: {inputs.get('risk', {}).get('status')}"],
+        "conflicting_signals": [],
+        "missing_information": [],
+        "invalidation_conditions": [f"Цена за стопом {round(stop, 6)}"],
+    }
+
+
+ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision)}
 
 
 class MockProvider:

@@ -96,9 +96,9 @@ def build_user_message(packet, inputs=None) -> str:
     return "\n".join(parts)
 
 
-def run_bot(name, schema, packet, provider, inputs=None, log=None):
+def run_bot(name, schema, packet, provider, inputs=None, log=None, prompt=None):
     """Ask the provider for one bot's answer; retry once on invalid output, then stop."""
-    system = load_prompt(name)
+    system = load_prompt(prompt or name)
     user = build_user_message(packet, inputs)
     context = {"packet": packet, "inputs": inputs or {}}
     errors = []
