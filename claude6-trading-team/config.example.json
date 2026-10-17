@@ -1,0 +1,12 @@
+{
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "max_output_tokens": 16000,
+  "use_refusal_fallbacks": true,
+  "reports_dir": "reports",
+  "logs_dir": "logs",
+  "simulation": {
+    "starting_balance_usd": 10000,
+    "simulated_loss_today_usd": 0
+  }
+}
