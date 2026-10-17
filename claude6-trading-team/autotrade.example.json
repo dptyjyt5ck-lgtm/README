@@ -68,6 +68,7 @@
     "max_open_positions": 3,
     "max_leverage": 10,
     "liquidation_buffer": 0.8,
+    "losing_streak_halve_risk": 4,
     "min_reward_risk": 1.5,
     "min_stop_pct": 0.2,
     "max_stop_pct": 8.0,

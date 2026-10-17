@@ -252,3 +252,60 @@ def test_bybit_leverage_not_modified_is_ok():
             raise Err()
 
     BybitDemoVenue("key", "secret", http_class=FakeHTTP).set_leverage("BTCUSDT", 5)
+
+
+def test_closed_trade_is_reviewed_and_lesson_is_fed_back(tmp_path):
+    seen = {}
+
+    class Spy(MockProvider):
+        def complete(self, bot, system, user, schema, context):
+            seen.setdefault(bot, []).append(context["inputs"])
+            return super().complete(bot, system, user, schema, context)
+
+    eng = engine(tmp_path, provider=Spy())
+    opened = eng.run_cycle()
+    assert opened["status"] == "opened"
+    assert seen["trade_decision"][-1]["past_performance"]["closed_trades"] == 0
+
+    stop = opened["outputs"]["decision"]["stop_loss"]
+    crash = make_bars(stop * 1.001, -0.5, n=5, start=datetime(2099, 1, 1))
+    eng.venue.candle_source = lambda s, n: (crash if s == "BTCUSDT" else MARKET[s])[-n:]
+    eng.run_cycle()
+
+    exit_msg = [m for m in eng.notifier.sent if "ВЫХОД" in m][-1]
+    assert "Урок:" in exit_msg and "-1.00R" in exit_msg
+    rows = (tmp_path / "state" / "lessons.jsonl").read_text(encoding="utf-8").splitlines()
+    record = json.loads(rows[0])
+    assert record["r_multiple"] == pytest.approx(-1.0, abs=0.01) and record["review"]["outcome"] == "loss"
+
+    perf = eng.past_performance()
+    assert perf["closed_trades"] == 1 and perf["losing_streak"] == 1
+    assert perf["by_market"]["BTCUSDT"]["win_rate_pct"] == 0
+    assert perf["recent_lessons"][0]["lesson"]
+
+
+def test_losing_streak_halves_risk(tmp_path):
+    eng = engine(tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "state" / "lessons.jsonl").open("w", encoding="utf-8") as fh:
+        for _ in range(RULES["losing_streak_halve_risk"]):
+            fh.write(json.dumps({"market": "ETHUSDT", "side": "BUY", "leverage": 3, "pnl_usd": -600,
+                                 "r_multiple": -1.0, "closed_by": "стоп", "review": None}) + "\n")
+    result = eng.run_cycle()
+    full = 10000 * RULES["risk_pct_per_trade"] / 100
+    stop = result["outputs"]["decision"]["stop_loss"]
+    assert result["qty"] * abs(result["order"]["price"] - stop) <= full / 2 + 1e-6
+    assert "Серия убытков" in eng.notifier.sent[-1]
+
+
+def test_reviewer_failure_does_not_block_exit(tmp_path):
+    class Broken(MockProvider):
+        def complete(self, bot, system, user, schema, context):
+            return "garbage" if bot == "reviewer" else super().complete(bot, system, user, schema, context)
+
+    eng = engine(tmp_path, provider=Broken())
+    opened = eng.run_cycle()
+    crash = make_bars(opened["outputs"]["decision"]["stop_loss"], -0.5, n=5, start=datetime(2099, 1, 1))
+    eng.venue.candle_source = lambda s, n: (crash if s == "BTCUSDT" else MARKET[s])[-n:]
+    eng.run_cycle()
+    assert any("ВЫХОД" in m for m in eng.notifier.sent)

@@ -56,6 +56,17 @@ class MT5DemoVenue(Venue):
                            "qty": float(p.volume), "entry": float(p.price_open)}
                 for p in rows if p.magic == MAGIC}
 
+    def closed_result(self, symbol, opened_ts):
+        mt5 = self.mt5
+        deals = mt5.history_deals_get(datetime.fromtimestamp(opened_ts, timezone.utc), datetime.now(timezone.utc),
+                                      group=symbol) or []
+        mine = [d for d in deals if d.magic == MAGIC]
+        exits = [d for d in mine if d.entry == mt5.DEAL_ENTRY_OUT]
+        if not exits:
+            return None
+        pnl = sum(d.profit + d.commission + d.swap for d in mine)
+        return {"exit": float(exits[-1].price), "pnl": round(pnl, 2)}
+
     def size(self, symbol, entry, stop, risk_usd, max_notional_usd):
         info = self._symbol(symbol)
         loss_per_lot = abs(entry - stop) / info.trade_tick_size * info.trade_tick_value

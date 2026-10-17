@@ -207,7 +207,19 @@ def trade_decision(packet, inputs):
     }
 
 
-ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision)}
+def reviewer(packet, inputs):
+    pnl = packet.get("result", {}).get("pnl_usd")
+    outcome = "unknown" if pnl is None else "win" if pnl > 0 else "loss" if pnl < 0 else "breakeven"
+    return {
+        "outcome": outcome,
+        "what_went_right": ["Стоп стоял заранее"],
+        "what_went_wrong": [] if outcome == "win" else ["Направление не подтвердилось"],
+        "lesson": f"{packet.get('market')} {packet.get('side')}: {outcome}, одна сделка — мало для выводов.",
+        "tags": [str(packet.get("market", "")).lower(), str(packet.get("side", "")).lower(), outcome],
+    }
+
+
+ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision, reviewer)}
 
 
 class MockProvider:

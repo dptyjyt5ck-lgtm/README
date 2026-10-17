@@ -52,6 +52,13 @@ class BybitDemoVenue(Venue):
         self._call("set_leverage", ok_codes=(LEVERAGE_NOT_MODIFIED,), category=self.category, symbol=symbol,
                    buyLeverage=str(leverage), sellLeverage=str(leverage))
 
+    def closed_result(self, symbol, opened_ts):
+        rows = self._call("get_closed_pnl", category=self.category, symbol=symbol,
+                          startTime=int(opened_ts * 1000), limit=50)["list"]
+        if not rows:
+            return None
+        return {"exit": float(rows[0]["avgExitPrice"]), "pnl": round(sum(float(r["closedPnl"]) for r in rows), 2)}
+
     def positions(self):
         rows = self._call("get_positions", category=self.category, settleCoin="USDT")["list"]
         return {r["symbol"]: {"side": "BUY" if r["side"] == "Buy" else "SELL", "qty": float(r["size"]),

@@ -44,6 +44,10 @@ class Venue:
     def set_leverage(self, symbol, leverage):
         """Venues where leverage is per account (MT5) or simulated (paper) ignore this."""
 
+    def closed_result(self, symbol, opened_ts):
+        """{"exit": price, "pnl": usd} for the position on symbol closed after opened_ts (unix seconds), or None."""
+        return None
+
     def sync(self):
         """Venue housekeeping; returns a list of closed-position events (may be empty)."""
         return []
