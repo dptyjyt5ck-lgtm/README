@@ -4,39 +4,85 @@
   "candles": 120,
   "state_dir": "state",
   "logs_dir": "logs",
-
   "model": "claude-opus-5-5",
   "models": {},
   "effort": "medium",
   "max_output_tokens": 16000,
   "use_refusal_fallbacks": true,
-
   "paper": {
     "starting_equity": 10000,
     "interval": "60",
-    "watchlist": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"]
+    "watchlist": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "BNBUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "LINKUSDT",
+      "AVAXUSDT",
+      "LTCUSDT"
+    ],
+    "universe": {
+      "top_n": 30,
+      "min_turnover_24h_usd": 50000000
+    }
   },
   "bybit": {
     "interval": "60",
-    "watchlist": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"]
+    "watchlist": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "BNBUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "LINKUSDT",
+      "AVAXUSDT",
+      "LTCUSDT"
+    ],
+    "universe": {
+      "top_n": 30,
+      "min_turnover_24h_usd": 50000000
+    }
   },
   "mt5": {
     "timeframe": "H1",
     "max_lots": 1.0,
     "min_liquidity_usd": 0,
-    "watchlist": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "XAUUSD"]
+    "watchlist": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "AUDUSD",
+      "USDCAD",
+      "USDCHF",
+      "XAUUSD"
+    ]
   },
-
   "rules": {
-    "risk_pct_per_trade": 0.5,
-    "max_notional_pct_of_equity": 100,
-    "max_daily_loss_pct": 2.0,
+    "risk_pct_per_trade": 6.0,
+    "max_daily_loss_pct": 12.0,
     "max_open_positions": 3,
+    "max_leverage": 10,
+    "liquidation_buffer": 0.8,
     "min_reward_risk": 1.5,
     "min_stop_pct": 0.2,
     "max_stop_pct": 8.0,
-    "min_liquidity_usd": 5000000,
-    "reject_if_any": ["no_price_data", "liquidity_below_minimum", "daily_loss_limit_reached", "trend_unknown"],
-    "reduce_if_any": ["unverified_claims", "possible_hype", "incomplete_chart_data", "poor_data_quality"]
+    "min_liquidity_usd": 500000,
+    "reject_if_any": [
+      "no_price_data",
+      "liquidity_below_minimum",
+      "daily_loss_limit_reached",
+      "trend_unknown"
+    ],
+    "reduce_if_any": [
+      "unverified_claims",
+      "possible_hype",
+      "incomplete_chart_data",
+      "poor_data_quality"
+    ]
   }
 }

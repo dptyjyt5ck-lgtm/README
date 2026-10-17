@@ -37,6 +37,13 @@ class Venue:
         """Open a position with stop and target attached. Returns {"ok", "id", "price", "message"}."""
         raise NotImplementedError
 
+    def universe(self, top_n, min_turnover_usd):
+        """Most traded symbols right now. Venues without a market scanner return None (use the watchlist)."""
+        return None
+
+    def set_leverage(self, symbol, leverage):
+        """Venues where leverage is per account (MT5) or simulated (paper) ignore this."""
+
     def sync(self):
         """Venue housekeeping; returns a list of closed-position events (may be empty)."""
         return []

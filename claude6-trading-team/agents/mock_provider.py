@@ -185,7 +185,7 @@ def trade_decision(packet, inputs):
     entry = packet["price_history"][-1]["close"]
     trend = charts_out.get("trend")
     if trend not in ("up", "down"):
-        return {"decision": "WAIT", "stop_loss": 0, "take_profit": 0, "reasons": [f"Тренд: {trend}"],
+        return {"decision": "WAIT", "stop_loss": 0, "take_profit": 0, "leverage": 1, "reasons": [f"Тренд: {trend}"],
                 "conflicting_signals": [], "missing_information": [], "invalidation_conditions": []}
     lows = [b["low"] for b in packet["price_history"][-10:]]
     highs = [b["high"] for b in packet["price_history"][-10:]]
@@ -199,6 +199,7 @@ def trade_decision(packet, inputs):
         "decision": "BUY" if trend == "up" else "SELL",
         "stop_loss": round(stop, 6),
         "take_profit": round(take, 6),
+        "leverage": 5,
         "reasons": [f"Тренд: {trend}", f"Риск: {inputs.get('risk', {}).get('status')}"],
         "conflicting_signals": [],
         "missing_information": [],

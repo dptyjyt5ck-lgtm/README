@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agents import charts, news, picker, risk, sentiment, trade_decision
 
-JOURNAL_FIELDS = ["time", "venue", "symbol", "side", "qty", "entry", "stop", "take", "risk_usd",
+JOURNAL_FIELDS = ["time", "venue", "symbol", "side", "qty", "leverage", "entry", "stop", "take", "risk_usd",
                   "risk_status", "order_id", "reasons"]
 
 
@@ -106,8 +106,12 @@ class Engine:
         if len(positions) >= self.rules["max_open_positions"]:
             return {"status": "max_positions"}
 
+        symbols = self.config["watchlist"]
+        universe = self.config.get("universe")
+        if universe:
+            symbols = self.venue.universe(universe["top_n"], universe["min_turnover_24h_usd"]) or symbols
         bars_by_symbol = {}
-        for symbol in self.config["watchlist"]:
+        for symbol in symbols:
             if symbol in positions:
                 continue  # one position per market
             try:
@@ -138,9 +142,9 @@ class Engine:
         outputs["sentiment"] = sentiment.run_live(packet, self.provider, log=self.log)
         outputs["charts"] = charts.run(packet, self.provider, log=self.log)
 
-        # The Risk gate sizes by equity: max loss = risk % per trade, max notional = leverage cap.
+        # The Risk gate sizes by equity: max loss = risk % per trade; notional is limited later by leverage.
         rules = {**self.rules, "max_loss_pct_per_trade": self.rules["risk_pct_per_trade"],
-                 "max_position_pct_of_balance": self.rules["max_notional_pct_of_equity"]}
+                 "max_position_pct_of_balance": self.rules["max_leverage"] * 100}
         simulation = {"starting_balance_usd": equity, "simulated_loss_today_usd": max(0.0, loss_today)}
         outputs["risk"] = risk.run(packet, outputs, self.provider, rules, simulation, log=self.log)
         self.log.info("risk -> %s", json.dumps(outputs["risk"], ensure_ascii=False))
@@ -160,26 +164,31 @@ class Engine:
             return {"status": "plan_rejected", "symbol": symbol, "problems": problems, "outputs": outputs}
 
         risk_usd = outputs["risk"]["maximum_simulated_loss"]
-        qty = self.venue.size(symbol, entry, dec["stop_loss"], risk_usd,
-                              outputs["risk"]["maximum_simulated_size"])
+        leverage = trade_decision.safe_leverage(dec, entry, self.rules)
+        # Each open position may use at most its share of the margin, so the next trade still fits.
+        margin_share = equity * 0.9 / self.rules["max_open_positions"]
+        max_notional = min(outputs["risk"]["maximum_simulated_size"], margin_share * leverage)
+        qty = self.venue.size(symbol, entry, dec["stop_loss"], risk_usd, max_notional)
         if qty <= 0:
             return {"status": "too_small", "symbol": symbol, "outputs": outputs}
 
+        self.venue.set_leverage(symbol, leverage)
         order = self.venue.market_order(symbol, dec["decision"], qty, dec["stop_loss"], dec["take_profit"])
         self.state["open_symbols"] = sorted(set(self.state["open_symbols"]) | {symbol})
         self.save()
-        self.journal(symbol, dec, qty, order, risk_usd, outputs["risk"]["status"])
+        self.journal(symbol, dec, qty, leverage, order, risk_usd, outputs["risk"]["status"])
         icon = "🟢" if dec["decision"] == "BUY" else "🔴"
         self.notifier.send("\n".join([
             f"{icon} ВХОД ({self.venue.name}) {dec['decision']} {symbol}",
-            f"Объём: {qty} · Цена ≈ {order['price']}",
+            f"Объём: {qty} · Плечо: x{leverage} · Цена ≈ {order['price']}",
             f"Стоп: {dec['stop_loss']} · Цель: {dec['take_profit']}",
             f"Риск: ${risk_usd:,.2f} ({risk_usd / equity * 100:.2f}% счёта · Risk Bot: {outputs['risk']['status']})",
             "Почему: " + "; ".join(dec["reasons"][:3]),
         ]))
-        return {"status": "opened", "symbol": symbol, "order": order, "qty": qty, "outputs": outputs}
+        return {"status": "opened", "symbol": symbol, "order": order, "qty": qty, "leverage": leverage,
+                "outputs": outputs}
 
-    def journal(self, symbol, dec, qty, order, risk_usd, risk_status):
+    def journal(self, symbol, dec, qty, leverage, order, risk_usd, risk_status):
         path = self.state_dir / "trades.csv"
         new = not path.exists()
         with path.open("a", newline="", encoding="utf-8") as fh:
@@ -188,7 +197,7 @@ class Engine:
                 writer.writeheader()
             writer.writerow({
                 "time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "venue": self.venue.name,
-                "symbol": symbol, "side": dec["decision"], "qty": qty, "entry": order["price"],
+                "symbol": symbol, "side": dec["decision"], "qty": qty, "leverage": leverage, "entry": order["price"],
                 "stop": dec["stop_loss"], "take": dec["take_profit"], "risk_usd": round(risk_usd, 2),
                 "risk_status": risk_status, "order_id": order["id"], "reasons": " | ".join(dec["reasons"]),
             })

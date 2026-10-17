@@ -3,7 +3,9 @@
 The client is always created with demo=True; there is no switch to the real account here.
 """
 from .base import Venue, VenueError, floor_step
-from .paper import _bar
+from .paper import _bar, top_by_turnover
+
+LEVERAGE_NOT_MODIFIED = 110043
 
 
 class BybitDemoVenue(Venue):
@@ -19,9 +21,15 @@ class BybitDemoVenue(Venue):
         self.interval = interval
         self._instruments = {}
 
-    def _call(self, method, **params):
-        resp = getattr(self.session, method)(**params)
-        if resp.get("retCode") != 0:
+    def _call(self, method, ok_codes=(), **params):
+        try:
+            resp = getattr(self.session, method)(**params)
+        except Exception as exc:  # pybit raises InvalidRequestError for non-zero retCode
+            code = getattr(exc, "status_code", None)
+            if code in ok_codes:
+                return {}
+            raise VenueError(f"Bybit {method}: {getattr(exc, 'message', type(exc).__name__)} (code {code})")
+        if resp.get("retCode") != 0 and resp.get("retCode") not in ok_codes:
             raise VenueError(f"Bybit {method}: {resp.get('retMsg')}")
         return resp["result"]
 
@@ -35,6 +43,14 @@ class BybitDemoVenue(Venue):
 
     def equity(self):
         return float(self._call("get_wallet_balance", accountType="UNIFIED")["list"][0]["totalEquity"])
+
+    def universe(self, top_n, min_turnover_usd):
+        rows = self._call("get_tickers", category=self.category)["list"]
+        return top_by_turnover(rows, top_n, min_turnover_usd)
+
+    def set_leverage(self, symbol, leverage):
+        self._call("set_leverage", ok_codes=(LEVERAGE_NOT_MODIFIED,), category=self.category, symbol=symbol,
+                   buyLeverage=str(leverage), sellLeverage=str(leverage))
 
     def positions(self):
         rows = self._call("get_positions", category=self.category, settleCoin="USDT")["list"]

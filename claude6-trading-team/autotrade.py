@@ -71,7 +71,8 @@ def build_engine(config, venue, settings, timeframe, provider, notifier, log):
     rules = dict(config["rules"])
     if "min_liquidity_usd" in settings:
         rules["min_liquidity_usd"] = settings["min_liquidity_usd"]
-    engine_config = {"watchlist": settings["watchlist"], "candles": config["candles"],
+    engine_config = {"watchlist": settings["watchlist"], "universe": settings.get("universe"),
+                     "candles": config["candles"],
                      "timeframe_label": timeframe, "state_dir": config["state_dir"]}
     return Engine(venue, provider, notifier, engine_config, rules, ROOT, log)
 
@@ -127,7 +128,10 @@ def main(argv=None):
         return 2
     engine = build_engine(config, venue, settings, timeframe, provider, notifier, log)
 
-    notifier.send(f"🤖 Команда ботов запущена: {venue.name}, рынков {len(settings['watchlist'])}, "
+    markets = (f"топ-{settings['universe']['top_n']} монет по обороту" if settings.get("universe")
+               else f"рынков {len(settings['watchlist'])}")
+    notifier.send(f"🤖 Команда ботов запущена: {venue.name}, {markets}, риск {config['rules']['risk_pct_per_trade']}% "
+                  f"на сделку, "
                   f"проверка каждые {config['interval_minutes']} мин. Команды: /status /stop /start")
     errors = 0
     while True:

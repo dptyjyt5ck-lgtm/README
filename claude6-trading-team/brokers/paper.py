@@ -6,6 +6,14 @@ from pathlib import Path
 from .base import Venue, floor_step
 
 BYBIT_PUBLIC = "https://api.bybit.com/v5/market/kline"
+BYBIT_TICKERS = "https://api.bybit.com/v5/market/tickers"
+
+
+def top_by_turnover(rows, top_n, min_turnover_usd):
+    """USDT perpetuals sorted by 24h turnover, filtered by a minimum."""
+    rows = [r for r in rows if r["symbol"].endswith("USDT") and float(r.get("turnover24h") or 0) >= min_turnover_usd]
+    rows.sort(key=lambda r: float(r["turnover24h"]), reverse=True)
+    return [r["symbol"] for r in rows[:top_n]]
 
 
 def bybit_public_candles(symbol, count, interval="60"):
@@ -29,10 +37,11 @@ def _bar(r):
 class PaperVenue(Venue):
     name = "Paper (simulated)"
 
-    def __init__(self, state_path, starting_equity=10000.0, candle_source=None, interval="60"):
+    def __init__(self, state_path, starting_equity=10000.0, candle_source=None, interval="60", ticker_source=None):
         self.state_path = Path(state_path)
         self.interval = interval
         self.candle_source = candle_source or (lambda s, n: bybit_public_candles(s, n, interval))
+        self.ticker_source = ticker_source
         if self.state_path.exists():
             self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
         else:
@@ -50,6 +59,17 @@ class PaperVenue(Venue):
 
     def equity(self):
         return self.state["equity"]
+
+    def universe(self, top_n, min_turnover_usd):
+        if self.ticker_source:
+            rows = self.ticker_source()
+        else:
+            import requests
+
+            resp = requests.get(BYBIT_TICKERS, params={"category": "linear"}, timeout=15)
+            resp.raise_for_status()
+            rows = resp.json()["result"]["list"]
+        return top_by_turnover(rows, top_n, min_turnover_usd)
 
     def positions(self):
         return {s: {k: p[k] for k in ("side", "qty", "entry")} for s, p in self.state["positions"].items()}
