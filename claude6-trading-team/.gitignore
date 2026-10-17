@@ -7,3 +7,6 @@ logs/*
 !logs/.gitkeep
 __pycache__/
 .pytest_cache/
+autotrade.json
+state/
+STOP

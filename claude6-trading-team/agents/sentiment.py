@@ -19,3 +19,8 @@ SCHEMA = {
 
 def run(packet, provider, log=None):
     return run_bot("sentiment", SCHEMA, packet, provider, log=log)
+
+
+def run_live(packet, provider, log=None):
+    """Same output shape; the prompt tells Claude to search the web for crowd mood."""
+    return run_bot("sentiment", SCHEMA, packet, provider, log=log, prompt="sentiment_live")
