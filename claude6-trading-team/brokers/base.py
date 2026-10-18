@@ -18,8 +18,8 @@ class Venue:
     def is_demo(self) -> bool:
         raise NotImplementedError
 
-    def candles(self, symbol, count):
-        """Oldest-first list of {date, open, high, low, close, volume}."""
+    def candles(self, symbol, count, timeframe=None):
+        """Oldest-first list of {date, open, high, low, close, volume}; timeframe=None means the entry timeframe."""
         raise NotImplementedError
 
     def equity(self) -> float:

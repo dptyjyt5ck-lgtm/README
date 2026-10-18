@@ -402,3 +402,44 @@ def test_engine_on_mt5_trades_on_weekdays_and_rests_on_weekends(tmp_path):
     closed_venue = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5(tick_age=2 * 86400))
     eng2 = Engine(closed_venue, MockProvider(), FakeNotifier(), config, rules, tmp_path / "w", LOG)
     assert eng2.run_cycle()["status"] == "no_data"
+
+
+def test_two_markets_per_cycle_and_higher_timeframes(tmp_path):
+    market = {"BTCUSDT": make_bars(30000, 0.15, last_volume_mult=3.0),
+              "ETHUSDT": make_bars(2000, -0.15, last_volume_mult=2.0),
+              "SOLUSDT": make_bars(150, 0.0)}
+    asked = []
+
+    def source(s, n, tf=None):
+        asked.append((s, tf))
+        return market[s][-n:]
+
+    seen = {}
+
+    class Spy(MockProvider):
+        def complete(self, bot, system, user, schema, context):
+            seen.setdefault(bot, []).append(context["packet"])
+            return super().complete(bot, system, user, schema, context)
+
+    eng = engine(tmp_path, provider=Spy(), market=market)
+    eng.venue.candle_source = source
+    eng.config.update(markets_per_cycle=2, context_timeframes=["60", "240", "D"], context_candles=60)
+    result = eng.run_cycle()
+
+    assert [r["symbol"] for r in result["results"]] == ["BTCUSDT", "ETHUSDT"]
+    assert [r["status"] for r in result["results"]] == ["opened", "opened"]
+    assert ("BTCUSDT", "240") in asked and ("SOLUSDT", "240") not in asked  # context only for picked markets
+    packet = seen["charts_live"][0]
+    assert set(packet["timeframes"]) == {"1h", "4h", "1D"} and len(packet["timeframes"]["4h"]) == 60
+    assert "price_history" not in seen["news"][0]  # web-search bots get a short brief, not candles
+    entries = [m for m in eng.notifier.sent if "ВХОД" in m]
+    assert len(entries) == 2 and "SELL ETHUSDT" in entries[1] and "Таймфреймы: 60m вход; 1h" in entries[0]
+
+
+def test_venue_rule_overrides_for_forex(tmp_path):
+    config = {**CONFIG, "state_dir": str(tmp_path / "state")}
+    venue = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5())
+    eng = autotrade.build_engine(config, venue, config["mt5"], "M15", MockProvider(), FakeNotifier(), LOG)
+    assert eng.rules["min_stop_pct"] == 0.08 and eng.rules["min_liquidity_usd"] == 0
+    assert eng.config["timeframe_label"] == "15m" and eng.config["context_timeframes"] == ["H1", "H4", "D1"]
+    assert eng.rules["risk_pct_per_trade"] == CONFIG["rules"]["risk_pct_per_trade"]

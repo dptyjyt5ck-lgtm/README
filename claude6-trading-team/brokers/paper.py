@@ -40,7 +40,7 @@ class PaperVenue(Venue):
     def __init__(self, state_path, starting_equity=10000.0, candle_source=None, interval="60", ticker_source=None):
         self.state_path = Path(state_path)
         self.interval = interval
-        self.candle_source = candle_source or (lambda s, n: bybit_public_candles(s, n, interval))
+        self.candle_source = candle_source or (lambda s, n, tf=None: bybit_public_candles(s, n, tf or interval))
         self.ticker_source = ticker_source
         if self.state_path.exists():
             self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -54,8 +54,10 @@ class PaperVenue(Venue):
     def is_demo(self):
         return True
 
-    def candles(self, symbol, count):
-        return self.candle_source(symbol, count)
+    def candles(self, symbol, count, timeframe=None):
+        if timeframe is None or timeframe == self.interval:
+            return self.candle_source(symbol, count)
+        return self.candle_source(symbol, count, timeframe)
 
     def equity(self):
         return self.state["equity"]

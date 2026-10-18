@@ -20,3 +20,27 @@ SCHEMA = {
 
 def run(packet, provider, log=None):
     return run_bot("charts", SCHEMA, packet, provider, log=log)
+
+
+LIVE_SCHEMA = {
+    **SCHEMA,
+    "properties": {
+        **SCHEMA["properties"],
+        "timeframes": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "timeframe": {"type": "string"},
+                "trend": {"type": "string", "enum": ["up", "down", "sideways", "unknown"]},
+                "comment": {"type": "string"},
+            },
+            "required": ["timeframe", "trend", "comment"],
+            "additionalProperties": False,
+        }},
+    },
+    "required": SCHEMA["required"] + ["timeframes"],
+}
+
+
+def run_live(packet, provider, log=None):
+    """Entry timeframe plus higher timeframes: a trend per timeframe and one overall view."""
+    return run_bot("charts_live", LIVE_SCHEMA, packet, provider, log=log)

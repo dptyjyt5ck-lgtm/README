@@ -7,6 +7,11 @@ from pathlib import Path
 
 from agents import charts, news, picker, reviewer, risk, sentiment, trade_decision
 
+# Venue timeframe codes (Bybit minutes / MT5 names) -> labels the bots read.
+TF_LABELS = {"1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "1h", "120": "2h", "240": "4h", "D": "1D",
+             "W": "1W", "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h", "D1": "1D",
+             "W1": "1W"}
+
 JOURNAL_FIELDS = ["time", "venue", "symbol", "side", "qty", "leverage", "entry", "stop", "take", "risk_usd",
                   "risk_status", "order_id", "reasons"]
 
@@ -201,22 +206,50 @@ class Engine:
             return {"status": "no_data"}
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        label = f"LIVE market data from {self.venue.name}, timeframe {self.config['timeframe_label']}"
+        label = f"LIVE market data from {self.venue.name}, entry timeframe {self.config['timeframe_label']}"
         watch_packet = {"_label": label, "as_of": now,
                         "watchlist": [summarize(s, b) for s, b in bars_by_symbol.items()]}
-
-        outputs = {"scout": picker.run(watch_packet, self.provider, log=self.log)}
-        self.log.info("pick -> %s", json.dumps(outputs["scout"], ensure_ascii=False))
-        symbol = outputs["scout"]["market"]
-        if symbol == picker.NONE:
+        pick = picker.run(watch_packet, self.provider, log=self.log)
+        self.log.info("pick -> %s", json.dumps(pick, ensure_ascii=False))
+        chosen = [m for m in dict.fromkeys(pick["markets"]) if m in bars_by_symbol]
+        chosen = chosen[:self.config.get("markets_per_cycle", 1)]
+        if not chosen:
             return {"status": "no_pick"}
 
-        bars = bars_by_symbol[symbol]
+        results, open_count = [], len(positions)
+        for symbol in chosen:
+            if open_count >= self.rules["max_open_positions"]:
+                break
+            result = self.analyze_and_trade(symbol, bars_by_symbol[symbol], picker.scout_view(pick, symbol),
+                                            equity, loss_today, now, label)
+            results.append(result)
+            if result["status"] == "opened":
+                open_count += 1
+                equity = self.venue.equity()
+        best = next((r for r in results if r["status"] == "opened"), results[0])
+        return {**best, "results": results}
+
+    def context_bars(self, symbol):
+        """Higher timeframes for direction; a failed timeframe is simply left out."""
+        frames = {}
+        for tf in self.config.get("context_timeframes", []):
+            try:
+                frames[TF_LABELS.get(tf, tf)] = self.venue.candles(symbol, self.config.get("context_candles", 60), tf)
+            except Exception as exc:
+                self.log.warning("candles %s %s failed: %s", symbol, tf, exc)
+        return frames
+
+    def analyze_and_trade(self, symbol, bars, scout_out, equity, loss_today, now, label):
+        outputs = {"scout": scout_out}
         packet = {"_label": label, "market": symbol, "as_of": now, "price_history": bars,
-                  "intraday": {"timeframe": self.config["timeframe_label"]}, "news": [], "social_posts": []}
-        outputs["news"] = news.run_live(packet, self.provider, log=self.log)
-        outputs["sentiment"] = sentiment.run_live(packet, self.provider, log=self.log)
-        outputs["charts"] = charts.run(packet, self.provider, log=self.log)
+                  "intraday": {"timeframe": self.config["timeframe_label"]},
+                  "timeframes": self.context_bars(symbol), "news": [], "social_posts": []}
+        # News and Sentiment search the web; they only need to know the market, not every candle.
+        brief = {"_label": label, "market": symbol, "as_of": now, "last_price": bars[-1]["close"],
+                 "change_last_24_bars_pct": summarize(symbol, bars)["change_pct"]}
+        outputs["news"] = news.run_live(brief, self.provider, log=self.log)
+        outputs["sentiment"] = sentiment.run_live(brief, self.provider, log=self.log)
+        outputs["charts"] = charts.run_live(packet, self.provider, log=self.log)
         outputs["past_performance"] = experience = self.past_performance()
 
         # The Risk gate sizes by equity: max loss = risk % per trade; notional is limited later by leverage.
@@ -224,20 +257,20 @@ class Engine:
                  "max_position_pct_of_balance": self.rules["max_leverage"] * 100}
         simulation = {"starting_balance_usd": equity, "simulated_loss_today_usd": max(0.0, loss_today)}
         outputs["risk"] = risk.run(packet, outputs, self.provider, rules, simulation, log=self.log)
-        self.log.info("risk -> %s", json.dumps(outputs["risk"], ensure_ascii=False))
+        self.log.info("%s risk -> %s", symbol, json.dumps(outputs["risk"], ensure_ascii=False))
         if outputs["risk"]["status"] == "reject":
             return {"status": "risk_reject", "symbol": symbol, "outputs": outputs}
 
         outputs["decision"] = trade_decision.run(packet, outputs, self.provider, log=self.log)
         dec = outputs["decision"]
-        self.log.info("decision -> %s", json.dumps(dec, ensure_ascii=False))
+        self.log.info("%s decision -> %s", symbol, json.dumps(dec, ensure_ascii=False))
         if dec["decision"] not in trade_decision.TRADES:
             return {"status": dec["decision"].lower(), "symbol": symbol, "outputs": outputs}
 
         entry = bars[-1]["close"]
         problems = trade_decision.check_plan(dec, entry, self.rules)
         if problems:
-            self.log.info("plan rejected: %s", problems)
+            self.log.info("%s plan rejected: %s", symbol, problems)
             return {"status": "plan_rejected", "symbol": symbol, "problems": problems, "outputs": outputs}
 
         risk_usd = outputs["risk"]["maximum_simulated_loss"]
@@ -266,11 +299,13 @@ class Engine:
         self.save()
         self.journal(symbol, dec, qty, leverage, order, risk_usd, outputs["risk"]["status"])
         icon = "🟢" if dec["decision"] == "BUY" else "🔴"
+        frames = ", ".join(f"{f['timeframe']} {f['trend']}" for f in outputs["charts"].get("timeframes", []))
         self.notifier.send("\n".join([
             f"{icon} ВХОД ({self.venue.name}) {dec['decision']} {symbol}",
             f"Объём: {qty} · Плечо: x{leverage} · Цена ≈ {order['price']}",
             f"Стоп: {dec['stop_loss']} · Цель: {dec['take_profit']}",
             f"Риск: ${risk_usd:,.2f} ({risk_usd / equity * 100:.2f}% счёта · Risk Bot: {outputs['risk']['status']})",
+            *([f"Таймфреймы: {self.config['timeframe_label']} вход; {frames}"] if frames else []),
             *(["⚠️ Серия убытков — риск снижен вдвое до первой прибыльной сделки"]
               if budget_usd < outputs["risk"]["maximum_simulated_loss"] else []),
             "Почему: " + "; ".join(dec["reasons"][:3]),

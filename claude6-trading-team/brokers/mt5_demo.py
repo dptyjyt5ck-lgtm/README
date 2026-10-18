@@ -54,9 +54,10 @@ class MT5DemoVenue(Venue):
             return False
         return time.time() - tick.time < STALE_TICK_SECONDS
 
-    def candles(self, symbol, count):
+    def candles(self, symbol, count, timeframe=None):
         self._symbol(symbol)
-        rates = self.mt5.copy_rates_from_pos(symbol, self.timeframe, 0, count)
+        tf = getattr(self.mt5, f"TIMEFRAME_{timeframe}") if timeframe else self.timeframe
+        rates = self.mt5.copy_rates_from_pos(symbol, tf, 0, count)
         if rates is None:
             raise VenueError(f"MT5 no candles for {symbol}: {self.mt5.last_error()}")
         return [{

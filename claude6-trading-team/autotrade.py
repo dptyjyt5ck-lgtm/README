@@ -50,13 +50,13 @@ def make_venue(config):
         settings = config["paper"]
         venue = PaperVenue(ROOT / config["state_dir"] / "paper.json", settings["starting_equity"],
                            interval=settings["interval"])
-        return venue, settings, f"{settings['interval']}m"
+        return venue, settings, settings["interval"]
     if kind == "BYBIT_DEMO":
         from brokers.bybit_demo import BybitDemoVenue
         settings = config["bybit"]
         venue = BybitDemoVenue(os.environ.get("BYBIT_API_KEY"), os.environ.get("BYBIT_API_SECRET"),
                                interval=settings["interval"])
-        return venue, settings, f"{settings['interval']}m"
+        return venue, settings, settings["interval"]
     if kind == "MT5_DEMO":
         from brokers.mt5_demo import MT5DemoVenue
         settings = config["mt5"]
@@ -68,12 +68,13 @@ def make_venue(config):
 
 
 def build_engine(config, venue, settings, timeframe, provider, notifier, log):
-    rules = dict(config["rules"])
-    if "min_liquidity_usd" in settings:
-        rules["min_liquidity_usd"] = settings["min_liquidity_usd"]
+    from autotrader.engine import TF_LABELS
+    rules = {**config["rules"], **settings.get("rules", {})}  # venue-specific overrides (e.g. forex stops)
     engine_config = {"watchlist": settings["watchlist"], "universe": settings.get("universe"),
-                     "candles": config["candles"],
-                     "timeframe_label": timeframe, "state_dir": config["state_dir"]}
+                     "candles": config["candles"], "context_timeframes": settings.get("context_timeframes", []),
+                     "context_candles": config.get("context_candles", 60),
+                     "markets_per_cycle": config.get("markets_per_cycle", 1),
+                     "timeframe_label": TF_LABELS.get(timeframe, timeframe), "state_dir": config["state_dir"]}
     return Engine(venue, provider, notifier, engine_config, rules, ROOT, log)
 
 

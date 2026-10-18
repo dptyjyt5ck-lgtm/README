@@ -161,23 +161,33 @@ def decision(packet, inputs):
 
 
 def pick(packet, inputs):
-    """Most active market: biggest move times volume spike; NONE if nothing stands out."""
-    best, best_score = None, 0.0
-    for row in packet.get("watchlist", []):
-        score = abs(row["change_pct"]) * row["volume_ratio"]
-        if row["volume_ratio"] >= 1.2 and score > best_score:
-            best, best_score = row, score
-    if best is None:
-        return {"market": "NONE", "reason_to_research": "Ничего не выделяется.", "liquidity_status": "unknown",
-                "data_quality": "good", "sources": [packet.get("_label", "")], "confidence": 0}
+    """Most active markets: biggest move times volume spike, best first; empty if nothing stands out."""
+    rows = [r for r in packet.get("watchlist", []) if r["volume_ratio"] >= 1.2]
+    rows.sort(key=lambda r: abs(r["change_pct"]) * r["volume_ratio"], reverse=True)
     return {
-        "market": best["symbol"],
-        "reason_to_research": f"Движение {best['change_pct']:+.1f}% при объёме {best['volume_ratio']:.1f}× к среднему.",
-        "liquidity_status": "high",
+        "markets": [r["symbol"] for r in rows[:3]],
+        "reason_to_research": "; ".join(f"{r['symbol']}: {r['change_pct']:+.1f}%, объём {r['volume_ratio']:.1f}×"
+                                        for r in rows[:3]) or "Ничего не выделяется.",
+        "liquidity_status": "high" if rows else "unknown",
         "data_quality": "good",
         "sources": [packet.get("_label", "")],
-        "confidence": 60,
+        "confidence": 60 if rows else 0,
     }
+
+
+def _trend(bars):
+    if len(bars) < 20:
+        return "unknown"
+    closes = [b["close"] for b in bars]
+    sma10, sma20 = sum(closes[-10:]) / 10, sum(closes[-20:]) / 20
+    return "up" if closes[-1] > sma10 > sma20 else "down" if closes[-1] < sma10 < sma20 else "sideways"
+
+
+def charts_live(packet, inputs):
+    out = charts(packet, inputs)
+    out["timeframes"] = [{"timeframe": tf, "trend": _trend(bars), "comment": f"{len(bars)} свечей"}
+                         for tf, bars in packet.get("timeframes", {}).items()]
+    return out
 
 
 def trade_decision(packet, inputs):
@@ -219,7 +229,8 @@ def reviewer(packet, inputs):
     }
 
 
-ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision, reviewer)}
+ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision, reviewer,
+                                    charts_live)}
 
 
 class MockProvider:

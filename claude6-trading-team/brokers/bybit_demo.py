@@ -36,9 +36,9 @@ class BybitDemoVenue(Venue):
     def is_demo(self):
         return True
 
-    def candles(self, symbol, count):
+    def candles(self, symbol, count, timeframe=None):
         rows = self._call("get_kline", category=self.category, symbol=symbol,
-                          interval=self.interval, limit=count)["list"]
+                          interval=timeframe or self.interval, limit=count)["list"]
         return [_bar(r) for r in reversed(rows)]
 
     def equity(self):

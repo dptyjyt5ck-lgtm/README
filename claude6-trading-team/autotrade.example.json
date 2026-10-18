@@ -1,7 +1,9 @@
 {
   "venue": "PAPER",
-  "interval_minutes": 30,
+  "interval_minutes": 15,
   "candles": 120,
+  "context_candles": 60,
+  "markets_per_cycle": 2,
   "state_dir": "state",
   "logs_dir": "logs",
   "model": "claude-opus-5-5",
@@ -11,7 +13,7 @@
   "use_refusal_fallbacks": true,
   "paper": {
     "starting_equity": 10000,
-    "interval": "60",
+    "interval": "15",
     "watchlist": [
       "BTCUSDT",
       "ETHUSDT",
@@ -27,10 +29,15 @@
     "universe": {
       "top_n": 30,
       "min_turnover_24h_usd": 50000000
-    }
+    },
+    "context_timeframes": [
+      "60",
+      "240",
+      "D"
+    ]
   },
   "bybit": {
-    "interval": "60",
+    "interval": "15",
     "watchlist": [
       "BTCUSDT",
       "ETHUSDT",
@@ -46,12 +53,16 @@
     "universe": {
       "top_n": 30,
       "min_turnover_24h_usd": 50000000
-    }
+    },
+    "context_timeframes": [
+      "60",
+      "240",
+      "D"
+    ]
   },
   "mt5": {
-    "timeframe": "H1",
+    "timeframe": "M15",
     "max_lots": 1.0,
-    "min_liquidity_usd": 0,
     "watchlist": [
       "EURUSD",
       "GBPUSD",
@@ -60,7 +71,16 @@
       "USDCAD",
       "USDCHF",
       "XAUUSD"
-    ]
+    ],
+    "context_timeframes": [
+      "H1",
+      "H4",
+      "D1"
+    ],
+    "rules": {
+      "min_liquidity_usd": 0,
+      "min_stop_pct": 0.08
+    }
   },
   "rules": {
     "risk_pct_per_trade": 6.0,
@@ -72,7 +92,7 @@
     "min_reward_risk": 1.5,
     "min_stop_pct": 0.2,
     "max_stop_pct": 8.0,
-    "min_liquidity_usd": 500000,
+    "min_liquidity_usd": 100000,
     "reject_if_any": [
       "no_price_data",
       "liquidity_below_minimum",
