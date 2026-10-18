@@ -178,7 +178,10 @@ class Engine:
         symbols = self.config["watchlist"]
         universe = self.config.get("universe")
         if universe:
-            symbols = self.venue.universe(universe["top_n"], universe["min_turnover_24h_usd"]) or symbols
+            try:
+                symbols = self.venue.universe(universe["top_n"], universe["min_turnover_24h_usd"]) or symbols
+            except Exception as exc:  # a scanner hiccup must not pause trading: fall back to the watchlist
+                self.log.warning("universe failed, using watchlist: %s", exc)
 
         # Hard daily cap on Claude analyses: the cost guard, whatever the market does.
         if self.state.get("analyses_day") != today:

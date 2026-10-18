@@ -486,3 +486,14 @@ def test_cost_guards_cooldown_daily_cap_and_news_cache(tmp_path):
     eng.config["max_analyses_per_day"] = 2
     assert eng.run_cycle()["status"] == "analysis_limit"
     assert calls.count("trade_decision") == 2
+
+
+def test_universe_failure_falls_back_to_watchlist(tmp_path):
+    eng = engine(tmp_path)
+    eng.config["universe"] = {"top_n": 5, "min_turnover_24h_usd": 1}
+
+    def broken():
+        raise ConnectionError("exchange down")
+
+    eng.venue.ticker_source = broken
+    assert eng.run_cycle()["status"] == "opened"  # BTCUSDT from the fixed watchlist
