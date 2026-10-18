@@ -31,7 +31,7 @@ def make_bars(start_price, step_pct, n=120, last_volume_mult=1.0, start=datetime
         o = price
         c = o * (1 + step_pct / 100)
         bars.append({"date": (start + timedelta(hours=i)).strftime("%Y-%m-%d %H:%M"), "open": o,
-                     "high": max(o, c) * 1.002, "low": min(o, c) * 0.998, "close": c, "volume": 1000.0})
+                     "high": max(o, c) * 1.0005, "low": min(o, c) * 0.9995, "close": c, "volume": 1000.0})
         price = c
     bars[-1]["volume"] *= last_volume_mult
     return bars
@@ -77,7 +77,7 @@ def test_cycle_opens_trade_and_sends_telegram(tmp_path):
 def test_no_second_position_in_same_market(tmp_path):
     eng = engine(tmp_path)
     eng.run_cycle()
-    assert eng.run_cycle()["status"] == "no_pick"  # BTC excluded, the rest is flat
+    assert eng.run_cycle()["status"] == "quiet"  # BTC excluded, the rest is flat
     assert len(eng.venue.positions()) == 1
 
 
@@ -351,7 +351,7 @@ class FakeMT5:
         return SimpleNamespace(time=_t.time() - self.tick_age, ask=1.10010, bid=1.10000)
 
     def copy_rates_from_pos(self, symbol, timeframe, start, count):
-        bars = make_bars(1.08, 0.02, n=count, last_volume_mult=3.0)
+        bars = make_bars(1.08, 0.1, n=count, last_volume_mult=3.0)
         return [{"time": int(datetime.strptime(b["date"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()),
                  "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "tick_volume": b["volume"]}
                 for b in bars]
@@ -401,7 +401,7 @@ def test_engine_on_mt5_trades_on_weekdays_and_rests_on_weekends(tmp_path):
 
     closed_venue = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5(tick_age=2 * 86400))
     eng2 = Engine(closed_venue, MockProvider(), FakeNotifier(), config, rules, tmp_path / "w", LOG)
-    assert eng2.run_cycle()["status"] == "no_data"
+    assert eng2.run_cycle()["status"] == "quiet"  # closed market: nothing analysed, no Claude call
 
 
 def test_two_markets_per_cycle_and_higher_timeframes(tmp_path):
@@ -428,7 +428,9 @@ def test_two_markets_per_cycle_and_higher_timeframes(tmp_path):
 
     assert [r["symbol"] for r in result["results"]] == ["BTCUSDT", "ETHUSDT"]
     assert [r["status"] for r in result["results"]] == ["opened", "opened"]
-    assert ("BTCUSDT", "240") in asked and ("SOLUSDT", "240") not in asked  # context only for picked markets
+    assert ("BTCUSDT", "240") in asked and ("SOLUSDT", "240") in asked  # the watchman checks every market
+    eng.run_cycle()
+    assert sum(1 for a in asked if a == ("SOLUSDT", "240")) == 1  # higher timeframes are cached
     packet = seen["charts_live"][0]
     assert set(packet["timeframes"]) == {"1h", "4h", "1D"} and len(packet["timeframes"]["4h"]) == 60
     assert "price_history" not in seen["news"][0]  # web-search bots get a short brief, not candles
@@ -443,3 +445,44 @@ def test_venue_rule_overrides_for_forex(tmp_path):
     assert eng.rules["min_stop_pct"] == 0.08 and eng.rules["min_liquidity_usd"] == 0
     assert eng.config["timeframe_label"] == "15m" and eng.config["context_timeframes"] == ["H1", "H4", "D1"]
     assert eng.rules["risk_pct_per_trade"] == CONFIG["rules"]["risk_pct_per_trade"]
+
+
+def test_watchman_needs_agreeing_timeframes_and_a_trigger():
+    from autotrader import watchman
+    up, down = make_bars(100, 0.2), make_bars(100, -0.2)
+    spike = make_bars(100, 0.2, last_volume_mult=3.0)
+    assert watchman.scan("X", spike, {"1h": up, "4h": up})["direction"] == "up"
+    assert watchman.scan("X", spike, {"1h": up, "4h": down}) is None  # higher timeframes disagree
+    assert watchman.scan("X", make_bars(100, 0.0, last_volume_mult=3.0), {}) is None  # flat market
+    quiet = make_bars(100, 0.2)
+    quiet[-1]["close"] = quiet[-2]["close"]  # trend but no trigger on the last candle
+    assert watchman.scan("X", quiet, {"1h": up}) is None
+
+
+def test_cost_guards_cooldown_daily_cap_and_news_cache(tmp_path):
+    calls = []
+
+    class Counting(MockProvider):
+        def complete(self, bot, system, user, schema, context):
+            calls.append(bot)
+            return super().complete(bot, system, user, schema, context)
+
+    market = {"BTCUSDT": make_bars(30000, 0.15, last_volume_mult=3.0)}
+    eng = engine(tmp_path, provider=Counting(), market=market)
+    eng.rules = {**RULES, "max_open_positions": 5}
+    eng.venue.market_order = lambda *a: {"ok": True, "id": "x", "price": 1.0, "message": ""}
+    eng.venue.positions = lambda: {}  # pretend the trade is gone, so the market could be analysed again
+
+    eng.run_cycle()
+    assert calls.count("news") == 1 and calls.count("trade_decision") == 1
+    eng.run_cycle()  # same minute: cooldown, no Claude at all
+    assert calls.count("trade_decision") == 1
+
+    eng.state["last_analysis"]["BTCUSDT"] = 0  # cooldown over
+    eng.run_cycle()
+    assert calls.count("trade_decision") == 2 and calls.count("news") == 1  # news reused from cache
+
+    eng.state["last_analysis"]["BTCUSDT"] = 0
+    eng.config["max_analyses_per_day"] = 2
+    assert eng.run_cycle()["status"] == "analysis_limit"
+    assert calls.count("trade_decision") == 2

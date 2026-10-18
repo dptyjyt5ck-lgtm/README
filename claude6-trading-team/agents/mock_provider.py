@@ -160,21 +160,6 @@ def decision(packet, inputs):
     }
 
 
-def pick(packet, inputs):
-    """Most active markets: biggest move times volume spike, best first; empty if nothing stands out."""
-    rows = [r for r in packet.get("watchlist", []) if r["volume_ratio"] >= 1.2]
-    rows.sort(key=lambda r: abs(r["change_pct"]) * r["volume_ratio"], reverse=True)
-    return {
-        "markets": [r["symbol"] for r in rows[:3]],
-        "reason_to_research": "; ".join(f"{r['symbol']}: {r['change_pct']:+.1f}%, объём {r['volume_ratio']:.1f}×"
-                                        for r in rows[:3]) or "Ничего не выделяется.",
-        "liquidity_status": "high" if rows else "unknown",
-        "data_quality": "good",
-        "sources": [packet.get("_label", "")],
-        "confidence": 60 if rows else 0,
-    }
-
-
 def _trend(bars):
     if len(bars) < 20:
         return "unknown"
@@ -229,7 +214,7 @@ def reviewer(packet, inputs):
     }
 
 
-ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, pick, trade_decision, reviewer,
+ANSWERS = {f.__name__: f for f in (scout, news, sentiment, charts, risk, decision, trade_decision, reviewer,
                                     charts_live)}
 
 

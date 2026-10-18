@@ -74,6 +74,8 @@ def build_engine(config, venue, settings, timeframe, provider, notifier, log):
                      "candles": config["candles"], "context_timeframes": settings.get("context_timeframes", []),
                      "context_candles": config.get("context_candles", 60),
                      "markets_per_cycle": config.get("markets_per_cycle", 1),
+                     **{k: config[k] for k in ("max_analyses_per_day", "reanalyze_cooldown_minutes",
+                                               "news_cache_hours", "context_refresh_minutes") if k in config},
                      "timeframe_label": TF_LABELS.get(timeframe, timeframe), "state_dir": config["state_dir"]}
     return Engine(venue, provider, notifier, engine_config, rules, ROOT, log)
 
@@ -99,7 +101,7 @@ def check_mode(venue_kind):
 
 
 def sleep_with_commands(engine, seconds):
-    """Sleep, but keep answering /stop /start /status every 20 seconds."""
+    """Sleep, but keep answering /stop /start /status every 20 seconds (or sooner on short sleeps)."""
     end = time.time() + seconds
     while time.time() < end:
         engine.handle_commands()
@@ -132,15 +134,17 @@ def main(argv=None):
     markets = (f"топ-{settings['universe']['top_n']} монет по обороту" if settings.get("universe")
                else f"рынков {len(settings['watchlist'])}")
     notifier.send(f"🤖 Команда ботов запущена: {venue.name}, {markets}, риск {config['rules']['risk_pct_per_trade']}% "
-                  f"на сделку, "
-                  f"проверка каждые {config['interval_minutes']} мин. Команды: /status /stop /start")
+                  f"на сделку. Дежурный проверяет рынки каждые {config['watch_interval_seconds']} с, "
+                  f"разборов Claude не больше {config['max_analyses_per_day']} в день. "
+                  "Команды: /status /stop /start")
     errors = 0
     while True:
         try:
             result = engine.run_cycle()
             errors = 0
-            log.info("cycle -> %s", result["status"])
-            print(f"cycle: {result['status']} {result.get('symbol', '')}", flush=True)
+            if result["status"] != "quiet":  # quiet minutes are the norm; keep the console readable
+                log.info("cycle -> %s %s", result["status"], result.get("symbol", ""))
+                print(f"cycle: {result['status']} {result.get('symbol', '')}", flush=True)
         except Exception as exc:
             errors += 1
             message = redact(f"{type(exc).__name__}: {exc}")
@@ -152,7 +156,7 @@ def main(argv=None):
                 notifier.send("⏸ Слишком много ошибок подряд — торговля на паузе. Проверьте и отправьте /start.")
         if args.once:
             return 0
-        sleep_with_commands(engine, config["interval_minutes"] * 60)
+        sleep_with_commands(engine, config["watch_interval_seconds"])
 
 
 if __name__ == "__main__":

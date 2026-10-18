@@ -2,26 +2,28 @@
 from .base import BotError, redact
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 5}
+# Server-side refusal fallback exists only for these models (not for Haiku).
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
+WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}  # $10 per 1000 searches
 MAX_CONTINUATIONS = 4
 
 
 class ClaudeProvider:
-    def __init__(self, model="claude-opus-5-5", effort="medium", max_tokens=16000,
+    def __init__(self, model="claude-haiku-5-5", effort="medium", max_tokens=16000,
                  use_fallbacks=True, client=None, web_search_bots=(), models=None):
         if client is None:
             import anthropic  # imported here so the offline mock run needs no SDK
             client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
         self.client = client
         self.model = model
-        self.models = models or {}  # optional per-bot override, e.g. {"news": "claude-haiku-5-5"}
+        self.models = models or {}  # per-bot override, e.g. {"trade_decision": "claude-opus-5-5"}
         self.effort = effort
         self.max_tokens = max_tokens
         self.use_fallbacks = use_fallbacks
         self.web_search_bots = set(web_search_bots)
 
     def _create(self, **request):
-        if self.use_fallbacks:
+        if self.use_fallbacks and request["model"] in FALLBACK_MODELS:
             # If a safety classifier declines, the API retries on a fallback model.
             return self.client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **request)
         return self.client.messages.create(**request)

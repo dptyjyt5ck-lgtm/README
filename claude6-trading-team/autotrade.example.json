@@ -1,13 +1,19 @@
 {
   "venue": "PAPER",
-  "interval_minutes": 15,
+  "watch_interval_seconds": 60,
+  "max_analyses_per_day": 40,
+  "reanalyze_cooldown_minutes": 60,
+  "news_cache_hours": 3,
+  "context_refresh_minutes": 15,
   "candles": 120,
   "context_candles": 60,
   "markets_per_cycle": 2,
   "state_dir": "state",
   "logs_dir": "logs",
-  "model": "claude-opus-5-5",
-  "models": {},
+  "model": "claude-haiku-5-5",
+  "models": {
+    "trade_decision": "claude-opus-5-5"
+  },
   "effort": "medium",
   "max_output_tokens": 16000,
   "use_refusal_fallbacks": true,

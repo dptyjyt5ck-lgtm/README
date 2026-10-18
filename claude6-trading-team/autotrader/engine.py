@@ -5,7 +5,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents import charts, news, picker, reviewer, risk, sentiment, trade_decision
+from agents import charts, news, reviewer, risk, sentiment, trade_decision
+
+from . import watchman
 
 # Venue timeframe codes (Bybit minutes / MT5 names) -> labels the bots read.
 TF_LABELS = {"1": "1m", "5": "5m", "15": "15m", "30": "30m", "60": "1h", "120": "2h", "240": "4h", "D": "1D",
@@ -16,21 +18,9 @@ JOURNAL_FIELDS = ["time", "venue", "symbol", "side", "qty", "leverage", "entry",
                   "risk_status", "order_id", "reasons"]
 
 
-def summarize(symbol, bars):
-    """Numbers computed in code for the Scout's watchlist overview."""
+def change_pct(bars, n=24):
     closes = [b["close"] for b in bars]
-    ranges = [b["high"] - b["low"] for b in bars[-14:]]
-    avg_vol = sum(b["volume"] for b in bars[:-1]) / max(1, len(bars) - 1)
-    sma20 = sum(closes[-20:]) / 20
-    sma50 = sum(closes[-50:]) / min(50, len(closes))
-    return {
-        "symbol": symbol,
-        "last_price": closes[-1],
-        "change_pct": round((closes[-1] / closes[-25] - 1) * 100, 2) if len(closes) > 25 else 0.0,
-        "volume_ratio": round(bars[-1]["volume"] / avg_vol, 2) if avg_vol else 0.0,
-        "atr_pct": round(sum(ranges) / len(ranges) / closes[-1] * 100, 2),
-        "trend_sma20_vs_sma50": "up" if sma20 > sma50 else "down",
-    }
+    return round((closes[-1] / closes[-n - 1] - 1) * 100, 2) if len(closes) > n else 0.0
 
 
 class Engine:
@@ -189,10 +179,20 @@ class Engine:
         universe = self.config.get("universe")
         if universe:
             symbols = self.venue.universe(universe["top_n"], universe["min_turnover_24h_usd"]) or symbols
-        bars_by_symbol = {}
+
+        # Hard daily cap on Claude analyses: the cost guard, whatever the market does.
+        if self.state.get("analyses_day") != today:
+            self.state.update(analyses_day=today, analyses_today=0)
+        left = self.config.get("max_analyses_per_day", 40) - self.state["analyses_today"]
+        if left <= 0:
+            return {"status": "analysis_limit"}
+
+        cooldown = self.config.get("reanalyze_cooldown_minutes", 60) * 60
+        last_seen = self.state.setdefault("last_analysis", {})
+        candidates, bars_by_symbol = [], {}
         for symbol in symbols:
-            if symbol in positions:
-                continue  # one position per market
+            if symbol in positions or time.time() - last_seen.get(symbol, 0) < cooldown:
+                continue  # one position per market; do not re-analyze the same market too often
             if not self.venue.is_tradable(symbol):
                 continue  # market closed: no analysis, no Claude cost
             try:
@@ -200,44 +200,64 @@ class Engine:
             except Exception as exc:
                 self.log.warning("candles %s failed: %s", symbol, exc)
                 continue
-            if len(bars) >= 30:
+            candidate = watchman.scan(symbol, bars, self.context_bars(symbol))
+            if candidate:
+                candidates.append(candidate)
                 bars_by_symbol[symbol] = bars
-        if not bars_by_symbol:
-            return {"status": "no_data"}
+        if not candidates:
+            return {"status": "quiet"}
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         label = f"LIVE market data from {self.venue.name}, entry timeframe {self.config['timeframe_label']}"
-        watch_packet = {"_label": label, "as_of": now,
-                        "watchlist": [summarize(s, b) for s, b in bars_by_symbol.items()]}
-        pick = picker.run(watch_packet, self.provider, log=self.log)
-        self.log.info("pick -> %s", json.dumps(pick, ensure_ascii=False))
-        chosen = [m for m in dict.fromkeys(pick["markets"]) if m in bars_by_symbol]
-        chosen = chosen[:self.config.get("markets_per_cycle", 1)]
-        if not chosen:
-            return {"status": "no_pick"}
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        chosen = candidates[:min(self.config.get("markets_per_cycle", 1), left)]
+        self.log.info("watchman -> %s", json.dumps(candidates[:5], ensure_ascii=False))
 
         results, open_count = [], len(positions)
-        for symbol in chosen:
+        for cand in chosen:
             if open_count >= self.rules["max_open_positions"]:
                 break
-            result = self.analyze_and_trade(symbol, bars_by_symbol[symbol], picker.scout_view(pick, symbol),
+            symbol = cand["symbol"]
+            last_seen[symbol] = time.time()
+            self.state["analyses_today"] += 1
+            self.save()
+            result = self.analyze_and_trade(symbol, bars_by_symbol[symbol], watchman.scout_output(cand, label),
                                             equity, loss_today, now, label)
             results.append(result)
             if result["status"] == "opened":
                 open_count += 1
                 equity = self.venue.equity()
+        if not results:
+            return {"status": "max_positions"}
         best = next((r for r in results if r["status"] == "opened"), results[0])
         return {**best, "results": results}
 
     def context_bars(self, symbol):
-        """Higher timeframes for direction; a failed timeframe is simply left out."""
+        """Higher timeframes for direction, cached in memory for a few minutes; a failed one is left out."""
+        cache = self.__dict__.setdefault("_context_cache", {})
+        hit = cache.get(symbol)
+        if hit and time.time() - hit[0] < self.config.get("context_refresh_minutes", 15) * 60:
+            return hit[1]
         frames = {}
         for tf in self.config.get("context_timeframes", []):
             try:
                 frames[TF_LABELS.get(tf, tf)] = self.venue.candles(symbol, self.config.get("context_candles", 60), tf)
             except Exception as exc:
                 self.log.warning("candles %s %s failed: %s", symbol, tf, exc)
+        cache[symbol] = (time.time(), frames)
         return frames
+
+    def fresh_news(self, symbol, brief):
+        """News and Sentiment (web search) are reused for a few hours per market — the main cost saver."""
+        cache = self.state.setdefault("news_cache", {})
+        hit = cache.get(symbol)
+        if hit and time.time() - hit["ts"] < self.config.get("news_cache_hours", 3) * 3600:
+            return hit["news"], hit["sentiment"]
+        result = (news.run_live(brief, self.provider, log=self.log),
+                  sentiment.run_live(brief, self.provider, log=self.log))
+        cache[symbol] = {"ts": time.time(), "news": result[0], "sentiment": result[1]}
+        self.save()
+        return result
 
     def analyze_and_trade(self, symbol, bars, scout_out, equity, loss_today, now, label):
         outputs = {"scout": scout_out}
@@ -246,9 +266,8 @@ class Engine:
                   "timeframes": self.context_bars(symbol), "news": [], "social_posts": []}
         # News and Sentiment search the web; they only need to know the market, not every candle.
         brief = {"_label": label, "market": symbol, "as_of": now, "last_price": bars[-1]["close"],
-                 "change_last_24_bars_pct": summarize(symbol, bars)["change_pct"]}
-        outputs["news"] = news.run_live(brief, self.provider, log=self.log)
-        outputs["sentiment"] = sentiment.run_live(brief, self.provider, log=self.log)
+                 "change_last_24_bars_pct": change_pct(bars)}
+        outputs["news"], outputs["sentiment"] = self.fresh_news(symbol, brief)
         outputs["charts"] = charts.run_live(packet, self.provider, log=self.log)
         outputs["past_performance"] = experience = self.past_performance()
 

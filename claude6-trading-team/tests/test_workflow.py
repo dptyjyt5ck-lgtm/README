@@ -183,6 +183,25 @@ def test_claude_refusal_stops(packet):
     def create(**kwargs):
         return SimpleNamespace(stop_reason="refusal", content=[])
 
-    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
-    with pytest.raises(BotError):
-        scout.run(packet, ClaudeProvider(client=client))
+    client = SimpleNamespace(messages=SimpleNamespace(create=create),
+                             beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    for model in ("claude-haiku-5-5", "claude-opus-5-5"):
+        with pytest.raises(BotError):
+            scout.run(packet, ClaudeProvider(model=model, client=client))
+
+
+def test_fallbacks_only_for_models_that_support_them(packet):
+    calls = []
+    answer = MockProvider().complete("scout", "", "", {}, {"packet": packet, "inputs": {}})
+
+    def create(kind):
+        def _create(**kwargs):
+            calls.append((kind, kwargs["model"], "fallbacks" in kwargs))
+            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=answer)])
+        return _create
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=create("plain")),
+                             beta=SimpleNamespace(messages=SimpleNamespace(create=create("beta"))))
+    scout.run(packet, ClaudeProvider(model="claude-haiku-5-5", models={"scout": "claude-opus-5-5"}, client=client))
+    scout.run(packet, ClaudeProvider(model="claude-haiku-5-5", client=client))
+    assert calls == [("beta", "claude-opus-5-5", True), ("plain", "claude-haiku-5-5", False)]
