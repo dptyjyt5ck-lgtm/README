@@ -62,7 +62,7 @@ def make_venue(config):
         settings = config["mt5"]
         venue = MT5DemoVenue(os.environ.get("MT5_LOGIN"), os.environ.get("MT5_PASSWORD"),
                              os.environ.get("MT5_SERVER"), timeframe=settings["timeframe"],
-                             max_lots=settings["max_lots"])
+                             max_lots=settings["max_lots"], path=os.environ.get("MT5_PATH") or None)
         return venue, settings, settings["timeframe"]
     raise SystemExit(f"Unknown venue {kind!r} (use PAPER, BYBIT_DEMO or MT5_DEMO)")
 

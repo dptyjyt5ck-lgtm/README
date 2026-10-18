@@ -37,6 +37,10 @@ class Venue:
         """Open a position with stop and target attached. Returns {"ok", "id", "price", "message"}."""
         raise NotImplementedError
 
+    def is_tradable(self, symbol) -> bool:
+        """False when the market is closed (weekend, holiday). 24/7 crypto venues are always open."""
+        return True
+
     def universe(self, top_n, min_turnover_usd):
         """Most traded symbols right now. Venues without a market scanner return None (use the watchlist)."""
         return None

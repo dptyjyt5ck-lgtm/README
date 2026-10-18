@@ -309,3 +309,96 @@ def test_reviewer_failure_does_not_block_exit(tmp_path):
     eng.venue.candle_source = lambda s, n: (crash if s == "BTCUSDT" else MARKET[s])[-n:]
     eng.run_cycle()
     assert any("ВЫХОД" in m for m in eng.notifier.sent)
+
+
+class FakeMT5:
+    """Minimal stand-in for the MetaTrader5 package (demo account, EURUSD)."""
+    ACCOUNT_TRADE_MODE_DEMO, ACCOUNT_TRADE_MODE_REAL = 0, 2
+    SYMBOL_TRADE_MODE_FULL = 4
+    TIMEFRAME_H1 = 16385
+    POSITION_TYPE_BUY, POSITION_TYPE_SELL = 0, 1
+    ORDER_TYPE_BUY, ORDER_TYPE_SELL = 0, 1
+    TRADE_ACTION_DEAL, ORDER_TIME_GTC = 1, 0
+    ORDER_FILLING_FOK, ORDER_FILLING_IOC, ORDER_FILLING_RETURN = 0, 1, 2
+    TRADE_RETCODE_DONE = 10009
+    DEAL_ENTRY_IN, DEAL_ENTRY_OUT = 0, 1
+
+    def __init__(self, tick_age=5, trade_mode=0):
+        self.tick_age, self.mode, self.sent, self.init_kwargs = tick_age, trade_mode, [], None
+
+    def initialize(self, **kwargs):
+        self.init_kwargs = kwargs
+        return True
+
+    def shutdown(self):
+        pass
+
+    def last_error(self):
+        return (0, "ok")
+
+    def account_info(self):
+        return SimpleNamespace(trade_mode=self.mode, equity=10000.0)
+
+    def symbol_select(self, symbol, enable):
+        return symbol == "EURUSD"
+
+    def symbol_info(self, symbol):
+        return SimpleNamespace(trade_mode=4, trade_tick_size=0.00001, trade_tick_value=1.0, volume_step=0.01,
+                               volume_min=0.01, digits=5, filling_mode=2)
+
+    def symbol_info_tick(self, symbol):
+        import time as _t
+        return SimpleNamespace(time=_t.time() - self.tick_age, ask=1.10010, bid=1.10000)
+
+    def copy_rates_from_pos(self, symbol, timeframe, start, count):
+        bars = make_bars(1.08, 0.02, n=count, last_volume_mult=3.0)
+        return [{"time": int(datetime.strptime(b["date"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()),
+                 "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"], "tick_volume": b["volume"]}
+                for b in bars]
+
+    def positions_get(self):
+        return []
+
+    def order_send(self, request):
+        self.sent.append(request)
+        return SimpleNamespace(retcode=10009, order=777, price=request["price"], comment="done")
+
+    def history_deals_get(self, date_from, date_to, group=None):
+        return [SimpleNamespace(magic=6060606, entry=0, price=1.1, profit=0.0, commission=-3.0, swap=0.0),
+                SimpleNamespace(magic=6060606, entry=1, price=1.095, profit=-500.0, commission=-3.0, swap=-1.0),
+                SimpleNamespace(magic=1, entry=1, price=1.0, profit=999.0, commission=0, swap=0)]
+
+
+def test_mt5_demo_sizing_order_and_closed_pnl():
+    mt5 = FakeMT5()
+    venue = MT5DemoVenue("123", "pw", "Broker-Demo", mt5_module=mt5, path="C:/MT5/terminal64.exe")
+    assert mt5.init_kwargs == {"login": 123, "password": "pw", "server": "Broker-Demo", "path": "C:/MT5/terminal64.exe"}
+    # 50 pips stop = 5000 ticks * $1 = $500 per lot -> $600 risk = 1.2 lots, capped at max_lots 1.0
+    assert venue.size("EURUSD", 1.10, 1.095, 600, 1e9) == 1.0
+    assert venue.size("EURUSD", 1.10, 1.095, 250, 1e9) == 0.5
+    order = venue.market_order("EURUSD", "BUY", 0.5, 1.095, 1.11)
+    req = mt5.sent[-1]
+    assert order["ok"] and req["price"] == 1.10010 and req["sl"] == 1.095 and req["magic"] == 6060606
+    assert req["type_filling"] == mt5.ORDER_FILLING_IOC
+    assert venue.closed_result("EURUSD", 0) == {"exit": 1.095, "pnl": -507.0}  # only our magic, with costs
+
+
+def test_mt5_missing_credentials_and_weekend():
+    with pytest.raises(VenueError, match="MT5_LOGIN"):
+        MT5DemoVenue("", "", "", mt5_module=FakeMT5())
+    weekend = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5(tick_age=2 * 86400))
+    assert weekend.is_tradable("EURUSD") is False
+    assert weekend.is_tradable("NOSUCH") is False
+
+
+def test_engine_on_mt5_trades_on_weekdays_and_rests_on_weekends(tmp_path):
+    config = {"watchlist": ["EURUSD"], "candles": 120, "timeframe_label": "H1", "state_dir": "state"}
+    rules = {**RULES, "min_liquidity_usd": 0}
+    open_venue = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5())
+    eng = Engine(open_venue, MockProvider(), FakeNotifier(), config, rules, tmp_path, LOG)
+    result = eng.run_cycle()
+    assert result["status"] == "opened" and "ВХОД (MT5 Demo) BUY EURUSD" in eng.notifier.sent[-1]
+
+    closed_venue = MT5DemoVenue("1", "pw", "S", mt5_module=FakeMT5(tick_age=2 * 86400))
+    eng2 = Engine(closed_venue, MockProvider(), FakeNotifier(), config, rules, tmp_path / "w", LOG)
+    assert eng2.run_cycle()["status"] == "no_data"

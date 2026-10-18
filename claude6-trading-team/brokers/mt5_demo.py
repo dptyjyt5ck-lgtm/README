@@ -2,24 +2,31 @@
 
 Refuses to run unless the connected account reports trade_mode == DEMO.
 """
+import time
 from datetime import datetime, timezone
 
 from .base import Venue, VenueError, floor_step
 
 MAGIC = 6060606  # marks positions opened by this program
+STALE_TICK_SECONDS = 15 * 60  # no quote for 15 minutes -> market treated as closed
 
 
 class MT5DemoVenue(Venue):
     name = "MT5 Demo"
 
-    def __init__(self, login, password, server, timeframe="H1", max_lots=1.0, mt5_module=None):
+    def __init__(self, login, password, server, timeframe="H1", max_lots=1.0, mt5_module=None, path=None):
         if mt5_module is None:
             try:
                 import MetaTrader5 as mt5_module
             except ImportError:
                 raise VenueError("pip install MetaTrader5 (works only on Windows next to a running MT5 terminal)")
         self.mt5 = mt5 = mt5_module
-        if not mt5.initialize(login=int(login), password=password, server=server):
+        if not login or not password or not server:
+            raise VenueError("MT5_LOGIN, MT5_PASSWORD and MT5_SERVER must be set in .env")
+        kwargs = {"login": int(login), "password": password, "server": server}
+        if path:
+            kwargs["path"] = path  # terminal64.exe, needed only if several terminals are installed
+        if not mt5.initialize(**kwargs):
             raise VenueError(f"MT5 initialize failed: {mt5.last_error()}")
         info = mt5.account_info()
         if info is None or info.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
@@ -35,6 +42,17 @@ class MT5DemoVenue(Venue):
         if not self.mt5.symbol_select(symbol, True):
             raise VenueError(f"MT5 symbol {symbol} not available (check the broker's symbol name)")
         return self.mt5.symbol_info(symbol)
+
+    def is_tradable(self, symbol):
+        """Trading allowed for the symbol and quotes are fresh (catches weekends and holidays)."""
+        try:
+            info = self._symbol(symbol)
+        except VenueError:
+            return False
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None or info.trade_mode != self.mt5.SYMBOL_TRADE_MODE_FULL:
+            return False
+        return time.time() - tick.time < STALE_TICK_SECONDS
 
     def candles(self, symbol, count):
         self._symbol(symbol)

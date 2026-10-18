@@ -188,6 +188,8 @@ class Engine:
         for symbol in symbols:
             if symbol in positions:
                 continue  # one position per market
+            if not self.venue.is_tradable(symbol):
+                continue  # market closed: no analysis, no Claude cost
             try:
                 bars = self.venue.candles(symbol, self.config["candles"])
             except Exception as exc:
